@@ -69,8 +69,8 @@ class MultiLens():
             A graph to be extracted features.
         Return
         ----------
-        self.X: array_like, shape(n_nodes, n_features)
-            Learned feature matrix after applying fit().
+        Y: array_like, shape(n_nodes, n_components)
+            Node embedding after applying fit().
         '''
         X = self._prepare_base_feats(g)
         X = self._search_rel_func_space(g=g, X=X)
@@ -98,8 +98,8 @@ class MultiLens():
             self.feat_defs learned by fitting is used.
         Return
         ----------
-        X: array_like, shape(n_nodes, n_features)
-            Feature matrix.
+        Y: array_like, shape(n_nodes, n_components)
+            Node embedding obtained with transfer learning using self.S.
         '''
         if feat_defs is None:
             feat_defs = self.get_feat_defs(flatten=True)
