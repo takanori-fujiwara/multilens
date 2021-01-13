@@ -5,13 +5,81 @@ from sklearn import decomposition
 
 from multilens_utils import NeighborOp, RelFeatOp
 
-# TODO: add link type in nbr_type (IMPORTANT! This needs to be done)
 # TODO: use more matrix calc (right now following the psuedocode in the deepgl paper)
 # TODO: use more sparse matrix to save memory usage
 # TODO: do sanity check for input of base_feats
 
 
 class MultiLens():
+    '''
+    Multi-LENS from Jin et al., 2019 (https://dl.acm.org/doi/abs/10.1145/3292500.3330992).
+
+    Parameters
+    ----------
+    base_feat_defs: list of strings, optional, (default=['in_degree', 'out_degree', 'total_degree'])
+        [Basic setting]
+        Base features considered for network representation learning. Current
+        implementation supports base features available in graph-tool:
+        'in_degree', 'out_degree', 'total_degree', 'pagerank', 'betweenness',
+        'closeness', 'eigenvector', 'katz', 'hits', 'kcore_decomposition',
+        'sequential_vertex_coloring', 'max_independent_vertex_set',
+        'label_components', 'label_out_component', 'label_largest_component'.
+        [Weighted edges]
+        Also, a weighted version of base feature is available by adding "w_" in
+        front of a base feature name. For exaple, weighted in-degree can be set
+        with "w_in_degree".
+        [Node attributes]
+        Node attributes can be included as well. To include node attributes,
+        indicate vertex property names used in input graph-tool graph objects.
+        For example, when graph objects have "gender" vertex property, you can
+        include it as base_feat_defs with "gender" (see sample.py).
+        [Edge filters]
+        Edge filters can be added for base feature computation as well. Set
+        efilts when using fit(), fit_transform(), or transform() (see fit())
+        and indicate related edge filter with "@[efilt_key]".
+        For example, when efilts={'filt1': xxx, 'filt2', xxx}, you can use
+        "total_degree@filter1" (see sample.py).
+    rel_feat_ops: list of strings, optional, (default=['mean', 'sum', 'maximum'])
+        Relational feature operators cosidered for learning. Current
+        implmentation supports: 'mean', 'sum', 'maximum', 'hadamard', 'lp_norm',
+        'rbf'. However, 'hadamard', 'lp_norm', 'rbf' are unstable to use.
+    nbr_types: list of strings, optional, (default=['in', 'out', 'all'])
+        Neighborhood types cosidered for learning. 'in', 'out', 'all' can be set.
+    ego_dist: int, optional, (default=3)
+        The maximum distance/# of hops to be used when computing egonet features.
+    n_hist_bins: int, optional, (default=5)
+        The number of histogram bins used when obtaining a histogram-based
+        context matrix.
+    mat_fact_method: sklearn decomposition method, optional, (default=decomposition.PCA)
+        Matrix factorization method used when computing summary representations.
+        In default, SVD (PCA) is used. Other methods, such as decomposition.NMF,
+        can be used as well.
+    n_components: int, optional, (default=30)
+        The number of components to be kept in summary representations.
+    Attributes
+    ----------
+    S: summary representation, shape(n_features, n_components)
+        Summary representation learned by fit().
+    feat_defs: list of lists of string
+        Learned features' definitions after applying fit(). i-th list of
+        strings correspond to i-egonet features' definitions.
+    base_feat_defs: list of strings
+        Access to the parameter.
+    rel_feat_ops: list of strings
+        Access to the parameter.
+    nbr_types: list of strings
+        Access to the parameter.
+    ego_dist: int
+        Access to the parameter.
+    n_hist_bins: int
+        Access to the parameter.
+    mat_fact_method: sklearn decomposition method
+        Access to the parameter.
+    n_components: int
+        Access to the parameter.
+    Examples
+    --------
+    '''
     def __init__(
             self,
             base_feat_defs=['in_degree', 'out_degree', 'total_degree'],
@@ -20,7 +88,6 @@ class MultiLens():
                 'l2_norm'
             ],
             nbr_types=['in', 'out', 'all'],
-            efilts={},
             ego_dist=3,
             n_hist_bins=5,
             mat_fact_method=decomposition.PCA,  # decomposition.NMF
@@ -32,12 +99,11 @@ class MultiLens():
         self.n_hist_bins = n_hist_bins
         self.factorizer = mat_fact_method()
         self.factorizer.n_components = n_components
-        self.efilts = efilts
 
         self.feat_defs = None
         self.S = None
 
-    def fit(self, g):
+    def fit(self, g, efilts={}):
         '''
         Apply fit (i.e., process learning procedures).
 
@@ -45,24 +111,31 @@ class MultiLens():
         ----------
         g: graph-tool graph object
             A graph to be extracted features.
+        efilts: dictionary, optional, (default={})
+            Dictionary of edge filter name and graph-tool's edge filter (e.g.,
+            {'filt1': efilt1, 'filt2': efilt2}). This is used and must be
+            provided when edge filters are set for self.base_feat_defs or
+            self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
+            the same length with g.num_edges(). As for graph-tool's edge filter,
+            refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
         Return
         ----------
         self
         '''
-        X = self._prepare_base_feats(g)
-        X = self._search_rel_func_space(g=g, X=X)
+        X = self._prepare_base_feats(g, efilts=efilts)
+        X = self._search_rel_func_space(g=g, X=X, efilts=efilts)
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
                                           nbr_types=self.nbr_types,
                                           n_bins=self.n_hist_bins,
-                                          efilts=self.efilts)
+                                          efilts=efilts)
 
         self.factorizer.fit(H)
         self.S = self.factorizer.components_
 
         return self
 
-    def fit_transform(self, g):
+    def fit_transform(self, g, efilts={}):
         '''
         Apply fit (i.e., process learning procedures) and then return self.X.
 
@@ -70,18 +143,25 @@ class MultiLens():
         ----------
         g: graph-tool graph object
             A graph to be extracted features.
+        efilts: dictionary, optional, (default={})
+            Dictionary of edge filter name and graph-tool's edge filter (e.g.,
+            {'filt1': efilt1, 'filt2': efilt2}). This is used and must be
+            provided when edge filters are set for self.base_feat_defs or
+            self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
+            the same length with g.num_edges(). As for graph-tool's edge filter,
+            refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
             Node embedding after applying fit().
         '''
-        X = self._prepare_base_feats(g)
-        X = self._search_rel_func_space(g=g, X=X)
+        X = self._prepare_base_feats(g, efilts=efilts)
+        X = self._search_rel_func_space(g=g, X=X, efilts=efilts)
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
                                           nbr_types=self.nbr_types,
                                           n_bins=self.n_hist_bins,
-                                          efilts=self.efilts)
+                                          efilts=efilts)
 
         Y = self.factorizer.fit_transform(H)
         self.S = self.factorizer.components_
@@ -105,6 +185,19 @@ class MultiLens():
         feat_defs: list of strings, optional, (default=None)
             Feature definitions to be used for producing features. If None,
             self.feat_defs learned by fitting is used.
+        nbr_types: list of strings, optional, (default=None)
+            Neighbor types to be used for producing features. If None,
+            self.nbr_types is used.
+        efilts: dictionary, optional, (default={})
+            Dictionary of edge filter name and graph-tool's edge filter (e.g.,
+            {'filt1': efilt1, 'filt2': efilt2}). This is used and must be
+            provided when edge filters are set for self.base_feat_defs or
+            self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
+            the same length with g.num_edges(). As for graph-tool's edge filter,
+            refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
+        n_hist_bins: int, optional, (default=None)
+            The number of histogram bins to be used for producing features. If
+            None, self.n_hist_bins is used.
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
@@ -258,14 +351,14 @@ class MultiLens():
 
         return self
 
-    def _prepare_base_feats(self, g):
+    def _prepare_base_feats(self, g, efilts):
         '''
         Compute and store all base features
         '''
         X = np.zeros((g.num_vertices(), len(self.base_feat_defs)))
         self.feat_defs = [self.base_feat_defs]
         for i, feat_def in enumerate(self.base_feat_defs):
-            self._comp_base_feat(g, feat_def, self.efilts)
+            self._comp_base_feat(g, feat_def, efilts)
             X[:, i] = g.vertex_properties[feat_def].a
 
         return X
@@ -276,7 +369,7 @@ class MultiLens():
         '''
         return f'{rel_op}^{nbr_type}-{prev_feat_def}'
 
-    def _search_rel_func_space(self, g, X):
+    def _search_rel_func_space(self, g, X, efilts):
         '''
         Searching the relational function space (Sec. 2.3, Rossi et al., 2018)
         '''
@@ -288,7 +381,7 @@ class MultiLens():
                 for nbr_type in self.nbr_types:
                     for prev_feat_def in prev_feat_defs:
                         new_feat_def = self._comp_rel_op_feat(
-                            g, op, nbr_type, prev_feat_def, self.efilts)
+                            g, op, nbr_type, prev_feat_def, efilts)
 
                         new_feat = np.expand_dims(
                             g.vertex_properties[new_feat_def].a, axis=1)

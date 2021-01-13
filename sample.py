@@ -8,7 +8,7 @@ g1 = gt.load_graph('./data/school_day2.xml.gz')
 
 # DeepGL setting
 multilens = MultiLens(ego_dist=3,
-                      base_feat_defs=['total_degree'],
+                      base_feat_defs=['total_degree', 'gender'],
                       nbr_types=['all'])
 
 # network representation learing with DeepGL
@@ -35,11 +35,10 @@ efilt = np.random.choice([True, False], size=g1.num_edges())
 # DeepGL setting
 multilens = MultiLens(ego_dist=3,
                       base_feat_defs=['total_degree', 'total_degree@sample'],
-                      nbr_types=['all@sample'],
-                      efilts={'sample': efilt})
+                      nbr_types=['all@sample'])
 
 # network representation learing with DeepGL
-Y1 = multilens.fit_transform(g1)
+Y1 = multilens.fit_transform(g1, efilts={'sample': efilt})
 
 # results
 print(Y1)
