@@ -20,6 +20,7 @@ class MultiLens():
                 'l2_norm'
             ],
             nbr_types=['in', 'out', 'all'],
+            efilts={},
             ego_dist=3,
             n_hist_bins=5,
             mat_fact_method=decomposition.PCA,  # decomposition.NMF
@@ -31,6 +32,7 @@ class MultiLens():
         self.n_hist_bins = n_hist_bins
         self.factorizer = mat_fact_method()
         self.factorizer.n_components = n_components
+        self.efilts = efilts
 
         self.feat_defs = None
         self.S = None
@@ -52,7 +54,8 @@ class MultiLens():
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
                                           nbr_types=self.nbr_types,
-                                          n_bins=self.n_hist_bins)
+                                          n_bins=self.n_hist_bins,
+                                          efilts=self.efilts)
 
         self.factorizer.fit(H)
         self.S = self.factorizer.components_
@@ -77,14 +80,20 @@ class MultiLens():
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
                                           nbr_types=self.nbr_types,
-                                          n_bins=self.n_hist_bins)
+                                          n_bins=self.n_hist_bins,
+                                          efilts=self.efilts)
 
         Y = self.factorizer.fit_transform(H)
         self.S = self.factorizer.components_
 
         return Y
 
-    def transform(self, g, feat_defs=None, nbr_types=None, n_hist_bins=None):
+    def transform(self,
+                  g,
+                  feat_defs=None,
+                  nbr_types=None,
+                  efilts={},
+                  n_hist_bins=None):
         '''
         Apply transform based on the learned feature definitions (i.e.,
         applying transfer learning to a different input graph).
@@ -120,14 +129,14 @@ class MultiLens():
                 if nbr_type is None:
                     tmp_feat_def = feat_op
                     if not tmp_feat_def in feat_defs_computed:
-                        self._comp_base_feat(g, feat_op)
+                        self._comp_base_feat(g, feat_op, efilts)
                 # rel operators
                 else:
                     tmp_feat_def = self._gen_feat_def(feat_op, nbr_type,
                                                       prev_tmp_feat_def)
                     if not tmp_feat_def in feat_defs_computed:
                         self._comp_rel_op_feat(g, feat_op, nbr_type,
-                                               prev_tmp_feat_def)
+                                               prev_tmp_feat_def, efilts)
 
                 feat_defs_computed.append(tmp_feat_def)
 
@@ -143,7 +152,8 @@ class MultiLens():
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
                                           nbr_types=nbr_types,
-                                          n_bins=n_hist_bins)
+                                          n_bins=n_hist_bins,
+                                          efilts=efilts)
 
         Y = H @ pinv(self.S)
 
@@ -171,7 +181,7 @@ class MultiLens():
             result = self.feat_defs
         return result
 
-    def _comp_base_feat(self, g, base_feat_def):
+    def _comp_base_feat(self, g, base_feat_def, efilts):
         '''
         Compute and store base feature by using a method provided by graph-tool
         '''
@@ -199,20 +209,26 @@ class MultiLens():
             eweight = g.edge_properties['weight']
             b_feat = base_feat_def[2:]
 
+        # to handle the case with edge filters
+        gv = g
+        if len(base_feat_def.split('@')) > 1:
+            b_feat, efilt_key = base_feat_def.split('@')
+            gv = gt.GraphView(g, efilt=efilts[efilt_key])
+
         if b_feat == 'in_degree' or b_feat == 'out_degree':
             g.vertex_properties[base_feat_def] = g.new_vertex_property(
                 'double')
-            for v in g.vertices():
+            for v in gv.vertices():
                 g.vertex_properties[base_feat_def][v] = eval("v." + b_feat)(
                     weight=eweight)
         elif b_feat == 'total_degree':
             g.vertex_properties[base_feat_def] = g.new_vertex_property(
                 'double')
-            for v in g.vertices():
+            for v in gv.vertices():
                 g.vertex_properties[base_feat_def][v] = v.in_degree(
                     weight=eweight) + v.out_degree(weight=eweight)
         elif b_feat in gt_measures and eweight is None:
-            vals = eval('gt.' + b_feat)(g)
+            vals = eval('gt.' + b_feat)(gv)
             if b_feat == "betweenness":
                 vals = vals[0]
             elif b_feat == "eigenvector":
@@ -223,7 +239,7 @@ class MultiLens():
                 vals = vals[0]
             g.vertex_properties[base_feat_def] = vals
         elif b_feat in gt_measures and eweight is not None:
-            vals = eval('gt.' + b_feat)(g, weight=eweight)
+            vals = eval('gt.' + b_feat)(gv, weight=eweight)
             if b_feat == "betweenness":
                 vals = vals[0]
             elif b_feat == "eigenvector":
@@ -249,7 +265,7 @@ class MultiLens():
         X = np.zeros((g.num_vertices(), len(self.base_feat_defs)))
         self.feat_defs = [self.base_feat_defs]
         for i, feat_def in enumerate(self.base_feat_defs):
-            self._comp_base_feat(g, feat_def)
+            self._comp_base_feat(g, feat_def, self.efilts)
             X[:, i] = g.vertex_properties[feat_def].a
 
         return X
@@ -258,42 +274,21 @@ class MultiLens():
         '''
         Generate feature definition string from inputs
         '''
-        return rel_op + '^' + nbr_type + '-' + prev_feat_def
-
-    def _comp_rel_op_feat(self, g, rel_op, nbr_type, prev_feat_def):
-        '''
-        Compute and store new features by applying relational operators
-        '''
-        new_feat_def = self._gen_feat_def(rel_op, nbr_type, prev_feat_def)
-
-        g.vertex_properties[new_feat_def] = g.new_vertex_property('double')
-        x = g.vertex_properties[prev_feat_def]
-
-        for v in g.vertices():
-            nbrs = eval('NeighborOp().' + nbr_type + '_nbr(g, v)')
-            feat_val = eval('RelFeatOp().' + rel_op + '(nbrs, x)')
-            # to avoid the result > inf (this happens when using hadamard)
-            feat_val = min(feat_val, np.finfo(np.float64).max)
-            g.vertex_properties[new_feat_def][v] = feat_val
-
-        return new_feat_def
+        return f'{rel_op}^{nbr_type}-{prev_feat_def}'
 
     def _search_rel_func_space(self, g, X):
         '''
         Searching the relational function space (Sec. 2.3, Rossi et al., 2018)
         '''
-        n_rel_feat_ops = len(self.rel_feat_ops)
-        n_nbr_types = len(self.nbr_types)
-
         for l in range(1, self.ego_dist):
             prev_feat_defs = self.feat_defs[l - 1]
             new_feat_defs = []
 
-            for i, op in enumerate(self.rel_feat_ops):
-                for j, nbr_type in enumerate(self.nbr_types):
-                    for k, prev_feat_def in enumerate(prev_feat_defs):
+            for op in self.rel_feat_ops:
+                for nbr_type in self.nbr_types:
+                    for prev_feat_def in prev_feat_defs:
                         new_feat_def = self._comp_rel_op_feat(
-                            g, op, nbr_type, prev_feat_def)
+                            g, op, nbr_type, prev_feat_def, self.efilts)
 
                         new_feat = np.expand_dims(
                             g.vertex_properties[new_feat_def].a, axis=1)
@@ -314,7 +309,16 @@ class MultiLens():
             feat_comps[i] = feat_comp.split('^')
         return feat_comps
 
-    def _comp_rel_op_feat(self, g, rel_op, nbr_type, prev_feat_def):
+    def _get_nbr_direction_and_graphview(self, g, nbr_type, efilts):
+        nbr_direction = nbr_type
+        gv = g
+        if len(nbr_type.split('@')) > 1:
+            nbr_direction, nbr_efilt_key = nbr_type.split('@')
+            gv = gt.GraphView(g, efilt=efilts[nbr_efilt_key])
+
+        return nbr_direction, gv
+
+    def _comp_rel_op_feat(self, g, rel_op, nbr_type, prev_feat_def, efilts):
         '''
         Compute and store new features by applying relational operators
         '''
@@ -323,8 +327,13 @@ class MultiLens():
         g.vertex_properties[new_feat_def] = g.new_vertex_property('double')
         x = g.vertex_properties[prev_feat_def]
 
-        for v in g.vertices():
-            nbrs = eval('NeighborOp().' + nbr_type + '_nbr(g, v)')
+        # TODO: by preparing graph view in advance, probably we can speed up
+        # the process
+        nbr_direction, gv = self._get_nbr_direction_and_graphview(
+            g, nbr_type, efilts)
+
+        for v in gv.vertices():
+            nbrs = eval('NeighborOp().' + nbr_direction + '_nbr(gv, v)')
             feat_val = eval('RelFeatOp().' + rel_op + '(nbrs, x)')
             # to avoid the result > inf (this happens when using hadamard)
             feat_val = min(feat_val, np.finfo(np.float64).max)
@@ -332,7 +341,7 @@ class MultiLens():
 
         return new_feat_def
 
-    def _gen_hist_context_matrix(self, g, X, nbr_types, n_bins=5):
+    def _gen_hist_context_matrix(self, g, X, nbr_types, efilts, n_bins=5):
         if n_bins <= 0:
             print('n_bins must be greater than 0')
             n_bins = 1
@@ -358,6 +367,7 @@ class MultiLens():
         bases = ranges**(1 / n_bins)
         bases[bases == 0] = np.finfo(float).eps
         bases[bases == 0] = 1
+        bases[np.log(bases) == 0] += 1  # to avoid zero divide
 
         start_exps = np.log(min_vals) / np.log(bases)
         stop_exps = np.log(max_vals) / np.log(bases)
@@ -374,8 +384,12 @@ class MultiLens():
 
         H = np.zeros((N, D * n_bins))
         for nbr_type in nbr_types:
-            for v in g.vertices():
-                nbrs = eval('NeighborOp().' + nbr_type + '_nbr(g, v)')
+            # TODO: by preparing graph view in advance, probably we can speed up
+            # the process
+            nbr_direction, gv = self._get_nbr_direction_and_graphview(
+                g, nbr_type, efilts)
+            for v in gv.vertices():
+                nbrs = eval('NeighborOp().' + nbr_direction + '_nbr(gv, v)')
                 for d in range(D):
                     nbr_feat_vals = X[nbrs, d]
                     hist, _ = np.histogram(nbr_feat_vals,
