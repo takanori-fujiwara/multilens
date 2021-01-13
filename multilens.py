@@ -2,6 +2,7 @@ import graph_tool.all as gt
 import numpy as np
 from scipy.linalg import pinv
 from sklearn import decomposition
+from sklearn.preprocessing import MinMaxScaler
 
 from multilens_utils import NeighborOp, RelFeatOp
 
@@ -39,7 +40,7 @@ class MultiLens():
         and indicate related edge filter with "@[efilt_key]".
         For example, when efilts={'filt1': xxx, 'filt2', xxx}, you can use
         "total_degree@filter1" (see sample.py).
-    rel_feat_ops: list of strings, optional, (default=['mean', 'sum', 'maximum'])
+    rel_feat_ops: list of strings, optional, (default=['minimum', 'maximum', 'sum', 'mean', 'variance', 'l1_norm', 'l2_norm'])
         Relational feature operators cosidered for learning. Current
         implmentation supports: 'mean', 'sum', 'maximum', 'hadamard', 'lp_norm',
         'rbf'. However, 'hadamard', 'lp_norm', 'rbf' are unstable to use.
@@ -130,6 +131,11 @@ class MultiLens():
                                           n_bins=self.n_hist_bins,
                                           efilts=efilts)
 
+        if self.factorizer.n_components > H.shape[1]:
+            print('n_components < # of cols of hist context matrix')
+            print(f'n_components = {H.shape[1]} is used')
+            self.factorizer.n_components = H.shape[1]
+
         self.factorizer.fit(H)
         self.S = self.factorizer.components_
 
@@ -162,6 +168,11 @@ class MultiLens():
                                           nbr_types=self.nbr_types,
                                           n_bins=self.n_hist_bins,
                                           efilts=efilts)
+
+        if self.factorizer.n_components > H.shape[1]:
+            print('n_components < # of cols of hist context matrix')
+            print(f'n_components = {H.shape[1]} is used')
+            self.factorizer.n_components = H.shape[1]
 
         Y = self.factorizer.fit_transform(H)
         self.S = self.factorizer.components_
@@ -344,10 +355,8 @@ class MultiLens():
             try:
                 g.vertex_properties[base_feat_def]
             except:
-                print('base feature, ' + base_feat_def +
-                      ', is set which is not supported in graph-tool. Load ' +
-                      base_feat_def +
-                      'as a vertex_properties before using MultiLens')
+                print(f'graph-tool do not support base feat {base_feat_def}.')
+                print(f'Set {base_feat_def} as v_prop before using fit')
 
         return self
 
@@ -442,38 +451,15 @@ class MultiLens():
         N, D = X.shape
 
         # TODO: maybe we should prepare differnt log binning methods
-        # (e.g., based on fixed bases, etc)
+        # (e.g., based on fixed bases, etc or no log binning (e.g., gender))
         # log binning
+        # prepare bins in a range of [1, 2**n_bins]
+        bins = np.logspace(0, n_bins, num=n_bins + 1, base=2)
+
         min_vals = X.min(axis=0)
-        zero_min_dims = (min_vals == 0)
-        # To handle, 0 values
-        min_vals[min_vals == 0] = np.finfo(float).eps
-        # this is to handle the case dtype is int
-        min_vals[min_vals == 0] = 1
-
         max_vals = X.max(axis=0)
-        zero_max_dims = (max_vals == 0)
-        max_vals[max_vals == 0] = np.finfo(float).eps
-        max_vals[max_vals == 0] = 1
-
         ranges = max_vals - min_vals
-        bases = ranges**(1 / n_bins)
-        bases[bases == 0] = np.finfo(float).eps
-        bases[bases == 0] = 1
-        bases[np.log(bases) == 0] += 1  # to avoid zero divide
-
-        start_exps = np.log(min_vals) / np.log(bases)
-        stop_exps = np.log(max_vals) / np.log(bases)
-        bins_for_all_dims = np.zeros((D, n_bins + 1))
-        for d in range(D):
-            bins = np.logspace(start_exps[d],
-                               stop_exps[d],
-                               num=n_bins + 1,
-                               base=bases[d])
-            if zero_min_dims[d]:
-                bins[0] = 0
-
-            bins_for_all_dims[d, :] = bins
+        ranges[ranges == 0] = 1
 
         H = np.zeros((N, D * n_bins))
         for nbr_type in nbr_types:
@@ -485,8 +471,10 @@ class MultiLens():
                 nbrs = eval('NeighborOp().' + nbr_direction + '_nbr(gv, v)')
                 for d in range(D):
                     nbr_feat_vals = X[nbrs, d]
-                    hist, _ = np.histogram(nbr_feat_vals,
-                                           bins=bins_for_all_dims[d])
+                    # scaling to [1, 2**n_bins]
+                    nbr_feat_vals = ((nbr_feat_vals - min_vals[d]) /
+                                     ranges[0]) * (2**n_bins - 1) + 1
+                    hist, _ = np.histogram(nbr_feat_vals, bins=bins)
                     H[int(v), d * n_bins:(d + 1) * n_bins] = hist
 
         return H
