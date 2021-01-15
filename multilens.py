@@ -104,7 +104,7 @@ class MultiLens():
         self.feat_defs = None
         self.S = None
 
-    def fit(self, g, efilts={}):
+    def fit(self, g, efilts={}, return_hist=False):
         '''
         Apply fit (i.e., process learning procedures).
 
@@ -119,6 +119,8 @@ class MultiLens():
             self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
             the same length with g.num_edges(). As for graph-tool's edge filter,
             refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
+        return_hist: boolean, optional, default=False
+            If True, return histogram-based context matrix H
         Return
         ----------
         self
@@ -139,9 +141,12 @@ class MultiLens():
         self.factorizer.fit(H)
         self.S = self.factorizer.components_
 
+        if return_hist:
+            return self, H
+
         return self
 
-    def fit_transform(self, g, efilts={}):
+    def fit_transform(self, g, efilts={}, return_hist=False):
         '''
         Apply fit (i.e., process learning procedures) and then return self.X.
 
@@ -156,6 +161,8 @@ class MultiLens():
             self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
             the same length with g.num_edges(). As for graph-tool's edge filter,
             refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
+        return_hist: boolean, optional, default=False
+            If True, return histogram-based context matrix H
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
@@ -177,6 +184,9 @@ class MultiLens():
         Y = self.factorizer.fit_transform(H)
         self.S = self.factorizer.components_
 
+        if return_hist:
+            return Y, H
+
         return Y
 
     def transform(self,
@@ -184,7 +194,8 @@ class MultiLens():
                   feat_defs=None,
                   nbr_types=None,
                   efilts={},
-                  n_hist_bins=None):
+                  n_hist_bins=None,
+                  return_hist=False):
         '''
         Apply transform based on the learned feature definitions (i.e.,
         applying transfer learning to a different input graph).
@@ -209,6 +220,8 @@ class MultiLens():
         n_hist_bins: int, optional, (default=None)
             The number of histogram bins to be used for producing features. If
             None, self.n_hist_bins is used.
+        return_hist: boolean, optional, default=False
+            If True, return histogram-based context matrix H
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
@@ -261,6 +274,8 @@ class MultiLens():
 
         Y = H @ pinv(self.S)
 
+        if return_hist:
+            return Y, H
         return Y
 
     def get_feat_defs(self, flatten=True):
