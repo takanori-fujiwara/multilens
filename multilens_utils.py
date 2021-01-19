@@ -60,18 +60,24 @@ class RelFeatOp():
         return result
 
     @classmethod
-    def maximum(cls, S, x, init=-sys.float_info.max):
-        result = init
-        for v in S:
-            result = max(result, x[v])
+    def maximum(cls, S, x, init=-sys.float_info.max, na_fill=0.0):
+        if len(S) == 0:
+            result = na_fill
+        else:
+            result = init
+            for v in S:
+                result = max(result, x[v])
 
         return result
 
     @classmethod
-    def minimum(cls, S, x, init=sys.float_info.max):
-        result = init
-        for v in S:
-            result = min(result, x[v])
+    def minimum(cls, S, x, init=sys.float_info.max, na_fill=0.0):
+        if len(S) == 0:
+            result = na_fill
+        else:
+            result = init
+            for v in S:
+                result = min(result, x[v])
 
         return result
 
