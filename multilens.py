@@ -90,6 +90,7 @@ class MultiLens():
             ],
             nbr_types=['in', 'out', 'all'],
             ego_dist=3,
+            use_nbr_for_hist=True,
             n_hist_bins=5,
             mat_fact_method=decomposition.PCA,  # decomposition.NMF
             n_components=30):
@@ -97,6 +98,7 @@ class MultiLens():
         self.rel_feat_ops = rel_feat_ops
         self.nbr_types = nbr_types
         self.ego_dist = ego_dist
+        self.use_nbr_for_hist = use_nbr_for_hist
         self.n_hist_bins = n_hist_bins
         self.factorizer = mat_fact_method()
         self.factorizer.n_components = n_components
@@ -104,7 +106,7 @@ class MultiLens():
         self.feat_defs = None
         self.S = None
 
-    def fit(self, g, efilts={}, return_hist=False):
+    def fit(self, g, efilts={}, use_nbr_for_hist=True, return_hist=False):
         '''
         Apply fit (i.e., process learning procedures).
 
@@ -127,11 +129,13 @@ class MultiLens():
         '''
         X = self._prepare_base_feats(g, efilts=efilts)
         X = self._search_rel_func_space(g=g, X=X, efilts=efilts)
-        H = self._gen_hist_context_matrix(g=g,
-                                          X=X,
-                                          nbr_types=self.nbr_types,
-                                          n_bins=self.n_hist_bins,
-                                          efilts=efilts)
+        H = self._gen_hist_context_matrix(
+            g=g,
+            X=X,
+            nbr_types=self.nbr_types,
+            n_bins=self.n_hist_bins,
+            efilts=efilts,
+            use_nbr_for_hist=self.use_nbr_for_hist)
 
         if self.factorizer.n_components > H.shape[1]:
             print('n_components < # of cols of hist context matrix')
@@ -146,7 +150,11 @@ class MultiLens():
 
         return self
 
-    def fit_transform(self, g, efilts={}, return_hist=False):
+    def fit_transform(self,
+                      g,
+                      efilts={},
+                      use_nbr_for_hist=True,
+                      return_hist=False):
         '''
         Apply fit (i.e., process learning procedures) and then return self.X.
 
@@ -170,11 +178,13 @@ class MultiLens():
         '''
         X = self._prepare_base_feats(g, efilts=efilts)
         X = self._search_rel_func_space(g=g, X=X, efilts=efilts)
-        H = self._gen_hist_context_matrix(g=g,
-                                          X=X,
-                                          nbr_types=self.nbr_types,
-                                          n_bins=self.n_hist_bins,
-                                          efilts=efilts)
+        H = self._gen_hist_context_matrix(
+            g=g,
+            X=X,
+            nbr_types=self.nbr_types,
+            n_bins=self.n_hist_bins,
+            efilts=efilts,
+            use_nbr_for_hist=self.use_nbr_for_hist)
 
         if self.factorizer.n_components > H.shape[1]:
             print('n_components < # of cols of hist context matrix')
@@ -194,6 +204,7 @@ class MultiLens():
                   feat_defs=None,
                   nbr_types=None,
                   efilts={},
+                  use_nbr_for_hist=True,
                   n_hist_bins=None,
                   return_hist=False):
         '''
@@ -220,8 +231,7 @@ class MultiLens():
         n_hist_bins: int, optional, (default=None)
             The number of histogram bins to be used for producing features. If
             None, self.n_hist_bins is used.
-        return_hist: boolean, optional, default=False
-            If True, return histogram-based context matrix H
+
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
@@ -270,7 +280,8 @@ class MultiLens():
                                           X=X,
                                           nbr_types=nbr_types,
                                           n_bins=n_hist_bins,
-                                          efilts=efilts)
+                                          efilts=efilts,
+                                          use_nbr_for_hist=use_nbr_for_hist)
 
         Y = H @ pinv(self.S)
 
@@ -458,7 +469,13 @@ class MultiLens():
 
         return new_feat_def
 
-    def _gen_hist_context_matrix(self, g, X, nbr_types, efilts, n_bins=5):
+    def _gen_hist_context_matrix(self,
+                                 g,
+                                 X,
+                                 nbr_types,
+                                 efilts,
+                                 n_bins=5,
+                                 use_nbr_for_hist=True):
         if n_bins <= 0:
             print('n_bins must be greater than 0')
             n_bins = 1
@@ -476,20 +493,31 @@ class MultiLens():
         ranges = max_vals - min_vals
         ranges[ranges == 0] = 1
 
-        H = np.zeros((N, D * n_bins))
-        for nbr_type in nbr_types:
-            # TODO: by preparing graph view in advance, probably we can speed up
-            # the process
-            nbr_direction, gv = self._get_nbr_direction_and_graphview(
-                g, nbr_type, efilts)
-            for v in gv.vertices():
-                nbrs = eval('NeighborOp().' + nbr_direction + '_nbr(gv, v)')
+        H = None
+        if use_nbr_for_hist:
+            H = np.zeros((N, D * n_bins))
+            for nbr_type in nbr_types:
+                # TODO: by preparing graph view in advance, probably we can speed up
+                # the process
+                nbr_direction, gv = self._get_nbr_direction_and_graphview(
+                    g, nbr_type, efilts)
+                for v in gv.vertices():
+                    nbrs = eval('NeighborOp().' + nbr_direction +
+                                '_nbr(gv, v)')
+                    for d in range(D):
+                        nbr_feat_vals = X[nbrs, d]
+                        # scaling to [1, 2**n_bins]
+                        nbr_feat_vals = ((nbr_feat_vals - min_vals[d]) /
+                                         ranges[0]) * (2**n_bins - 1) + 1
+                        hist, _ = np.histogram(nbr_feat_vals, bins=bins)
+                        H[int(v), d * n_bins:(d + 1) * n_bins] = hist
+        else:
+            H = np.zeros((N, D))
+            for v in g.vertices():
                 for d in range(D):
-                    nbr_feat_vals = X[nbrs, d]
-                    # scaling to [1, 2**n_bins]
-                    nbr_feat_vals = ((nbr_feat_vals - min_vals[d]) /
-                                     ranges[0]) * (2**n_bins - 1) + 1
-                    hist, _ = np.histogram(nbr_feat_vals, bins=bins)
-                    H[int(v), d * n_bins:(d + 1) * n_bins] = hist
+                    feat_val = X[int(v), d]
+                    feat_val = ((feat_val - min_vals[d]) /
+                                ranges[0]) * (2**n_bins - 1) + 1
+                    H[int(v), d] = np.log2(feat_val)
 
         return H
