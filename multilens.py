@@ -3,6 +3,7 @@ import math
 import graph_tool.all as gt
 import numpy as np
 from scipy.linalg import pinv
+from scipy.stats import rankdata
 from sklearn import decomposition
 from sklearn.preprocessing import MinMaxScaler
 
@@ -516,7 +517,7 @@ class MultiLens():
             print('alpha must between 0.0 and 1.0')
 
         n, d = X.shape
-        X_argsort = np.argsort(X, axis=0)
+        ranks = rankdata(X, method='average', axis=0)
 
         bin_start = 0
         bin_width = math.ceil(alpha * n)
@@ -525,8 +526,7 @@ class MultiLens():
         while bin_start <= n:
             bin_end = bin_start + bin_width
 
-            for i in range(d):
-                X[X_argsort[bin_start:bin_end, i], i] = bin_val
+            X[(ranks >= bin_start) * (ranks < bin_end)] = bin_val
 
             bin_start = bin_end
             bin_width = math.ceil(alpha * bin_width)
