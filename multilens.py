@@ -1,3 +1,5 @@
+import math
+
 import graph_tool.all as gt
 import numpy as np
 from scipy.linalg import pinv
@@ -48,9 +50,25 @@ class MultiLens():
         Neighborhood types cosidered for learning. 'in', 'out', 'all' can be set.
     ego_dist: int, optional, (default=3)
         The maximum distance/# of hops to be used when computing egonet features.
+    use_nbr_for_hist: bool, optional, (default=True)
+        If True, when generating a histogram-based context matrix, for each
+        node, generate histograms with (n_hist_bins) bins from its neighbor
+        nodes' feature values (i.e., each cell of the histogram-based context
+        matrix will have (n_hist_bins) values). See Sec. 3.3 in MultiLens by
+        Jin et al., 2019.
+        If False, generate a histogram-based context matrix by scaling each
+        node's feature with log binning using log_binning_alpha (i.e., each
+        cell of the histogram-based context matrix will have 1 value). See
+        Sec.2.3 of DeepGL by Rossi et al., 2018.
     n_hist_bins: int, optional, (default=5)
-        The number of histogram bins used when obtaining a histogram-based
-        context matrix.
+        (This is used when use_nbr_for_hist=True) The number of histogram bins
+        used when obtaining a histogram-based context matrix.
+    log_binning_alpha: float, optional, (default=0.5)
+        (This is used when use_nbr_for_hist=False) Ratio of bin width to the
+        base bin width used for each bin. For example, if values are from 0 to
+        100 and log_binning_alpha = 0.8, the first bin is from 0-80, the next
+        bin is 80-96, and so on. log_binning_alpha must be
+        0.0 < log_binning_alpha < 1.0.
     mat_fact_method: sklearn decomposition method, optional, (default=decomposition.PCA)
         Matrix factorization method used when computing summary representations.
         In default, SVD (PCA) is used. Other methods, such as decomposition.NMF,
@@ -92,6 +110,7 @@ class MultiLens():
             ego_dist=3,
             use_nbr_for_hist=True,
             n_hist_bins=5,
+            log_binning_alpha=0.5,
             mat_fact_method=decomposition.PCA,  # decomposition.NMF
             n_components=30):
         self.base_feat_defs = base_feat_defs
@@ -100,13 +119,14 @@ class MultiLens():
         self.ego_dist = ego_dist
         self.use_nbr_for_hist = use_nbr_for_hist
         self.n_hist_bins = n_hist_bins
+        self.log_binning_alpha = log_binning_alpha
         self.factorizer = mat_fact_method()
         self.factorizer.n_components = n_components
 
         self.feat_defs = None
         self.S = None
 
-    def fit(self, g, efilts={}, use_nbr_for_hist=True, return_hist=False):
+    def fit(self, g, efilts={}, return_hist=False):
         '''
         Apply fit (i.e., process learning procedures).
 
@@ -132,10 +152,11 @@ class MultiLens():
         H = self._gen_hist_context_matrix(
             g=g,
             X=X,
-            nbr_types=self.nbr_types,
+            use_nbr_for_hist=self.use_nbr_for_hist,
             n_bins=self.n_hist_bins,
+            nbr_types=self.nbr_types,
             efilts=efilts,
-            use_nbr_for_hist=self.use_nbr_for_hist)
+            log_binning_alpha=self.log_binning_alpha)
 
         if self.factorizer.n_components > H.shape[1]:
             print('n_components < # of cols of hist context matrix')
@@ -150,11 +171,7 @@ class MultiLens():
 
         return self
 
-    def fit_transform(self,
-                      g,
-                      efilts={},
-                      use_nbr_for_hist=True,
-                      return_hist=False):
+    def fit_transform(self, g, efilts={}, return_hist=False):
         '''
         Apply fit (i.e., process learning procedures) and then return self.X.
 
@@ -181,10 +198,11 @@ class MultiLens():
         H = self._gen_hist_context_matrix(
             g=g,
             X=X,
-            nbr_types=self.nbr_types,
+            use_nbr_for_hist=self.use_nbr_for_hist,
             n_bins=self.n_hist_bins,
+            nbr_types=self.nbr_types,
             efilts=efilts,
-            use_nbr_for_hist=self.use_nbr_for_hist)
+            log_binning_alpha=self.log_binning_alpha)
 
         if self.factorizer.n_components > H.shape[1]:
             print('n_components < # of cols of hist context matrix')
@@ -204,8 +222,9 @@ class MultiLens():
                   feat_defs=None,
                   nbr_types=None,
                   efilts={},
-                  use_nbr_for_hist=True,
+                  use_nbr_for_hist=None,
                   n_hist_bins=None,
+                  log_binning_alpha=None,
                   return_hist=False):
         '''
         Apply transform based on the learned feature definitions (i.e.,
@@ -228,15 +247,41 @@ class MultiLens():
             self.nbr_type. Each edge filter (e.g., 'efilt1' above) must have
             the same length with g.num_edges(). As for graph-tool's edge filter,
             refer to class graph_tool.GraphView in https://graph-tool.skewed.de/static/doc/graph_tool.html?highlight=graphview#graph_tool.GraphView.
+        use_nbr_for_hist: bool, optional, (default=True)
+            If True, when generatign a histogram-based context matrix, for each
+            node, generate histograms with (n_hist_bins) bins from its neighbor
+            nodes' feature values (i.e., each cell of the histogram-based context
+            matrix will have (n_hist_bins) values). See Sec. 3.3 in MultiLens by
+            Jin et al., 2019.
+            If False, generate a histogram-based context matrix by scaling each
+            node's feature with log binning using log_binning_alpha (i.e., each
+            cell of the histogram-based context matrix will have 1 value). See
+            Sec.2.3 of DeepGL by Rossi et al., 2018.
+            If None, self.use_nbr_for_hist is used.
         n_hist_bins: int, optional, (default=None)
             The number of histogram bins to be used for producing features. If
             None, self.n_hist_bins is used.
-
+        log_binning_alpha: float, optional, (default=None)
+            (This is used when use_nbr_for_hist=False) Ratio of bin width to the
+            base bin width used for each bin. For example, if values are from 0 to
+            100 and log_binning_alpha = 0.8, the first bin is from 0-80, the next
+            bin is 80-96, and so on. log_binning_alpha must be
+            0.0 < log_binning_alpha < 1.0.
+            If None, self.log_binning_alpha is used.
         Return
         ----------
         Y: array_like, shape(n_nodes, n_components)
             Node embedding obtained with transfer learning using self.S.
         '''
+        if nbr_types is None:
+            nbr_types = self.nbr_types
+        if use_nbr_for_hist is None:
+            use_nbr_for_hist = self.use_nbr_for_hist
+        if n_hist_bins is None:
+            n_hist_bins = self.n_hist_bins
+        if log_binning_alpha is None:
+            log_binning_alpha = self.log_binning_alpha
+
         if feat_defs is None:
             feat_defs = self.get_feat_defs(flatten=True)
 
@@ -271,17 +316,13 @@ class MultiLens():
         for i, feat_def in enumerate(feat_defs):
             X[:, i] = g.vertex_properties[feat_def].a
 
-        if nbr_types is None:
-            nbr_types = self.nbr_types
-        if n_hist_bins is None:
-            n_hist_bins = self.n_hist_bins
-
         H = self._gen_hist_context_matrix(g=g,
                                           X=X,
-                                          nbr_types=nbr_types,
+                                          use_nbr_for_hist=use_nbr_for_hist,
                                           n_bins=n_hist_bins,
+                                          nbr_types=nbr_types,
                                           efilts=efilts,
-                                          use_nbr_for_hist=use_nbr_for_hist)
+                                          log_binning_alpha=log_binning_alpha)
 
         Y = H @ pinv(self.S)
 
@@ -469,13 +510,32 @@ class MultiLens():
 
         return new_feat_def
 
-    def _gen_hist_context_matrix(self,
-                                 g,
-                                 X,
-                                 nbr_types,
-                                 efilts,
-                                 n_bins=5,
-                                 use_nbr_for_hist=True):
+    def _log_binning(self, X, alpha=0.5, copy=False):
+        # note: this method overwrites X
+        if alpha > 1.0 or alpha < 0.0:
+            print('alpha must between 0.0 and 1.0')
+
+        n, d = X.shape
+        X_argsort = np.argsort(X, axis=0)
+
+        bin_start = 0
+        bin_width = math.ceil(alpha * n)
+        bin_val = 0
+
+        while bin_start <= n:
+            bin_end = bin_start + bin_width
+
+            for i in range(d):
+                X[X_argsort[bin_start:bin_end, i], i] = bin_val
+
+            bin_start = bin_end
+            bin_width = math.ceil(alpha * bin_width)
+            bin_val += 1
+
+        return X
+
+    def _gen_hist_context_matrix(self, g, X, use_nbr_for_hist, n_bins,
+                                 nbr_types, efilts, log_binning_alpha):
         if n_bins <= 0:
             print('n_bins must be greater than 0')
             n_bins = 1
@@ -508,16 +568,19 @@ class MultiLens():
                         nbr_feat_vals = X[nbrs, d]
                         # scaling to [1, 2**n_bins]
                         nbr_feat_vals = ((nbr_feat_vals - min_vals[d]) /
-                                         ranges[0]) * (2**n_bins - 1) + 1
+                                         ranges[d]) * (2**n_bins - 1) + 1
                         hist, _ = np.histogram(nbr_feat_vals, bins=bins)
                         H[int(v), d * n_bins:(d + 1) * n_bins] = hist
         else:
-            H = np.zeros((N, D))
-            for v in g.vertices():
-                for d in range(D):
-                    feat_val = X[int(v), d]
-                    feat_val = ((feat_val - min_vals[d]) /
-                                ranges[0]) * (2**n_bins - 1) + 1
-                    H[int(v), d] = np.log2(feat_val)
+            H = self._log_binning(X, alpha=log_binning_alpha)
+        # else:
+        #     H = np.zeros((N, D))
+        #     for v in g.vertices():
+        #         for d in range(D):
+        #             feat_val = X[int(v), d]
+        #             # scaling to [1, 2**n_bins]
+        #             feat_val = ((feat_val - min_vals[d]) /
+        #                         ranges[d]) * (2**n_bins - 1) + 1
+        #             H[int(v), d] = np.log2(feat_val)
 
         return H
