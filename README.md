@@ -11,13 +11,13 @@ Requirements
 -----
 * Python3
 * graph-tool (https://graph-tool.skewed.de/)
-* Note: Tested on macOS Big Sur.
+* Note: Tested on macOS Ventura.
 ******
 
 Setup
 -----
 * Install graph-tool (https://git.skewed.de/count0/graph-tool/-/wikis/installation-instructions)
-  * For example, macOS X with Homebrew,
+  * For example, macOS with Homebrew,
 
     `brew install graph-tool`
 
